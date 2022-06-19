@@ -21,6 +21,10 @@ class V2:
     x: float
     y: float
 
+    def set(self, other: 'V2'):
+        self.x = other.x
+        self.y = other.y
+
     def __eq__(self, other):
         return self.x == other[0] and self.y == other[1]
 
@@ -75,6 +79,8 @@ VecType = Union[V2i, V2]
 class SpriteSheet:
     texture: rl.Texture
     frames: int
+    origin: rl.Vector2
+    anims: Dict[str, List[int]]
 
     @property
     def width(self):
@@ -99,7 +105,7 @@ class SpriteSheet:
                 self.width,
                 self.texture.height,
             ),
-            rl.Vector2(0, 0),
+            self.origin,
             0,
             rl.WHITE,
         )
@@ -109,9 +115,9 @@ class SpriteSheet:
 class Sprites:
     sprites: Dict[str, SpriteSheet] = field(default_factory=dict)
 
-    def load(self, filename, nframes=1):
+    def load(self, filename, nframes=1, origin=rl.Vector2(0, 0), anims={}):
         name = filename.split(".")[0]
-        self.sprites[name] = SpriteSheet(rl.load_texture(filename), nframes)
+        self.sprites[name] = SpriteSheet(rl.load_texture(filename), nframes, origin, anims)
         assert (
             self.sprites[name].texture.width % nframes == 0
         ), "not divisible by nframes"
@@ -149,7 +155,11 @@ camera = rl.Camera2D(
 )
 
 state = Namespace(
-    player=Namespace(pos=V2(0, 0)),
+    player=Namespace(
+        pos=V2(0, 0),
+        next_pos=V2(0, 0),
+        flip=False,
+    ),
     knights=[],
 )
 
@@ -184,11 +194,19 @@ LEVEL1 = """\
 
 cur_level = LEVEL1
 
+
 def tile_free(state, tile):
-    return cur_level[tile.y][tile.x] in ('.', '-') and tile != state.player.pos and all(k.path[k.path_i] != tile for k in state.knights)
+    return (
+        cur_level[tile.y][tile.x] in (".", "-")
+        and tile != state.player.pos
+        and tile != state.player.next_pos
+        and all(k.path[k.path_i] != tile for k in state.knights)
+    )
+
 
 sprites = Sprites()
 sprites.load("knight.png", 2)
+sprites.load("hero.png", 6, origin=rl.Vector2(0, 0), anims={'walk': [4, 5], 'idle': [0, 1], 'bonk': [0, 2, 3]})
 
 
 def find_path(level):
@@ -222,31 +240,78 @@ path = find_path(cur_level)
 state.knights.append(Knight(path, 0, path[0]))
 state.knights.append(Knight(path, 0, path[0] - V2(0, 10)))
 
+
+def tween(pos: V2, target: V2, time: float):
+    start = rl.get_time()
+    orig_val = pos.copy()
+    while rl.get_time() < start + time:
+        t = (rl.get_time() - start) / time
+        pos.set(orig_val + (target - orig_val) * t)
+        yield
+
+    pos.set(target)
+
+
+def wait(time: float):
+    start = rl.get_time()
+    while rl.get_time() < start + time:
+        yield (rl.get_time() - start) / time
+
+
+input_tween = None
+
+
 def step_game(state):
+    t = 0
+    global input_tween
+
     rl.begin_mode_2d(camera)
 
-    next_pos = state.player.pos.copy()
-    if rl.is_key_pressed(rl.KEY_LEFT):
-        next_pos.x -= 1
-    if rl.is_key_pressed(rl.KEY_RIGHT):
-        next_pos.x += 1
-    if rl.is_key_pressed(rl.KEY_UP):
-        next_pos.y -= 1
-    if rl.is_key_pressed(rl.KEY_DOWN):
-        next_pos.y += 1
+    move: Optional[V2] = None
+    if rl.is_key_down(rl.KEY_LEFT):
+        move = V2(-1, 0)
+    if rl.is_key_down(rl.KEY_RIGHT):
+        move = V2(1, 0)
+    if rl.is_key_down(rl.KEY_UP):
+        move = V2(0, -1)
+    if rl.is_key_down(rl.KEY_DOWN):
+        move = V2(0, 1)
 
-    next_pos = next_pos.clamp(0, GRID_COUNT - 1)
+    if input_tween is None:
+        if rl.is_key_pressed(rl.KEY_SPACE):
+            input_tween = wait(0.2)
+        if move:
+            state.player.flip = move.x < 0 if abs(move.x) > 0 else state.player.flip
+            next_pos = (state.player.pos + move).clamp(0, GRID_COUNT - 1).floor()
 
-    if tile_free(state, next_pos):
-        state.player.pos = next_pos
+            if next_pos != state.player.pos and tile_free(state, next_pos):
+                input_tween = tween(state.player.pos, next_pos, 0.2)
+                state.player.next_pos = next_pos
+    else:
+        try:
+            t = next(input_tween)
+        except StopIteration:
+            input_tween = None
 
-    rl.draw_rectangle(
-        state.player.pos.x * GRID_SIZE,
-        state.player.pos.y * GRID_SIZE,
-        GRID_SIZE,
-        GRID_SIZE,
-        rl.WHITE,
-    )
+    if input_tween is not None:
+        if input_tween.__name__ == 'tween':
+            sprites.hero.draw_frame(
+                state.player.pos * GRID_SIZE,
+                sprites.hero.anims['walk'][int((rl.get_time() % 0.2) / 0.1)],
+                state.player.flip,
+            )
+        elif input_tween.__name__ == 'wait':
+
+            print(int(t * len(sprites.hero.anims['bonk'])))
+            sprites.hero.draw_frame(
+                state.player.pos * GRID_SIZE,
+                sprites.hero.anims['bonk'][int(t * len(sprites.hero.anims['bonk']))],
+                state.player.flip,
+            )
+    else:
+        sprites.hero.draw_frame(state.player.pos * GRID_SIZE,
+                                sprites.hero.anims['idle'][int((rl.get_time() % 5) > 4.9)],
+                                state.player.flip)
 
     for i in range(GRID_COUNT):
         # rl.draw_line(0, i * GRID_SIZE, GRID_COUNT * GRID_SIZE, i * GRID_SIZE, rl.WHITE)

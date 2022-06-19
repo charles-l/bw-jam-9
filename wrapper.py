@@ -1,6 +1,7 @@
 import pyray as rl
 from importlib import reload
 import traceback as tb
+import copy
 
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 800
@@ -9,11 +10,17 @@ rl.set_target_fps(60)
 
 import game  # noqa
 state = game.state
+orig_state = copy.deepcopy(state)
 error = None
 
 while not rl.window_should_close():
     rl.begin_drawing()
     rl.clear_background(rl.BLACK)
+
+    if rl.is_key_released(rl.KEY_R):
+        error = None
+        reload(game)
+        state = game.state
 
     if rl.is_key_released(rl.KEY_F5):
         error = None
