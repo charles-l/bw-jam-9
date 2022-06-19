@@ -1,12 +1,11 @@
 import pyray as rl
-import heapq
-import numpy as np
 from dataclasses import dataclass, field
-from enum import IntEnum, auto
-from typing import Tuple, List, Optional, Dict, TypeVar, NewType, Union
+from typing import Tuple, List, Optional, Dict, TypeVar, NewType, Union, Generator
 from types import SimpleNamespace as Namespace
 import math
+from perlin_noise import PerlinNoise
 
+noise = PerlinNoise()
 
 T = TypeVar("T")
 
@@ -21,7 +20,7 @@ class V2:
     x: float
     y: float
 
-    def set(self, other: 'V2'):
+    def set(self, other: "V2"):
         self.x = other.x
         self.y = other.y
 
@@ -117,7 +116,12 @@ class Sprites:
 
     def load(self, filename, nframes=1, origin=rl.Vector2(0, 0), anims={}):
         name = filename.split(".")[0]
-        self.sprites[name] = SpriteSheet(rl.load_texture(filename), nframes, origin, anims)
+        tex = rl.load_texture(filename)
+        if origin.x < 0:
+            origin.x = (tex.width // nframes) + origin.x
+        if origin.y < 0:
+            origin.y = (tex.height) + origin.y
+        self.sprites[name] = SpriteSheet(tex, nframes, origin, anims)
         assert (
             self.sprites[name].texture.width % nframes == 0
         ), "not divisible by nframes"
@@ -127,11 +131,22 @@ class Sprites:
         return self.sprites[name]
 
 
-@dataclass
+@dataclass(slots=True)
 class Knight:
     path: List[V2i]
     path_i: int
     pos: V2
+
+    def rect(self):
+        return rl.Rectangle(
+            self.pos.x, self.pos.y, sprites.knight.width, sprites.knight.texture.height
+        )
+
+
+@dataclass(slots=True)
+class Dart:
+    pos: V2
+    vel: V2
 
 
 SCREEN_WIDTH = 800
@@ -161,6 +176,7 @@ state = Namespace(
         flip=False,
     ),
     knights=[],
+    darts=[Dart(V2(200, 10), V2(-2, 0))],
 )
 
 LEVEL1 = """\
@@ -170,16 +186,16 @@ LEVEL1 = """\
 .......-...w............
 .......-...w............
 .......-...w............
-.......-...w............
-.......-................
-.......-----------......
+.......-...w-----.......
+.......-....-...-.......
+.......------...--......
 .................-......
 .................-......
 .................-......
 .................-......
 .................-......
 .................-......
-.................-......
+..............>..-......
 .................-......
 .................-......
 .................-......
@@ -206,7 +222,18 @@ def tile_free(state, tile):
 
 sprites = Sprites()
 sprites.load("knight.png", 2)
-sprites.load("hero.png", 6, origin=rl.Vector2(0, 0), anims={'walk': [4, 5], 'idle': [0, 1], 'bonk': [0, 2, 3]})
+sprites.load(
+    "hero.png",
+    6,
+    origin=rl.Vector2(0, 0),
+    anims={"walk": [4, 5], "idle": [0, 1], "bonk": [0, 2, 3]},
+)
+sprites.load(
+    "pillar.png",
+    4,
+    origin=rl.Vector2(0, -GRID_SIZE),
+    anims={"lit": [0, 1, 2], "snuffed": [3]},
+)
 
 
 def find_path(level):
@@ -238,7 +265,26 @@ def find_path(level):
 
 path = find_path(cur_level)
 state.knights.append(Knight(path, 0, path[0]))
-state.knights.append(Knight(path, 0, path[0] - V2(0, 10)))
+state.knights.append(Knight(path, 0, path[0] - V2(0, 20)))
+state.knights.append(Knight(path, 0, path[0] - V2(0, 40)))
+state.knights.append(Knight(path, 0, path[0] - V2(0, 60)))
+state.knights.append(Knight(path, 0, path[0] - V2(0, 80)))
+
+
+def killer_pillar(state, pos: V2):
+    last_time = rl.get_time()
+    while True:
+        if rl.get_time() - last_time > 1:
+            state.darts.append(Dart(pos * GRID_SIZE + V2(10, 5), V2(2, 0)))
+            last_time = rl.get_time()
+        yield
+
+
+trap_coros = {}
+for y, row in enumerate(cur_level):
+    for x, v in enumerate(row):
+        if v == ">" or v == "<":
+            trap_coros[(x, y)] = killer_pillar(state, V2(x, y))
 
 
 def tween(pos: V2, target: V2, time: float):
@@ -262,8 +308,8 @@ input_tween = None
 
 
 def step_game(state):
-    t = 0
     global input_tween
+    t = 0
 
     rl.begin_mode_2d(camera)
 
@@ -294,24 +340,30 @@ def step_game(state):
             input_tween = None
 
     if input_tween is not None:
-        if input_tween.__name__ == 'tween':
+        if input_tween.__name__ == "tween":
             sprites.hero.draw_frame(
                 state.player.pos * GRID_SIZE,
-                sprites.hero.anims['walk'][int((rl.get_time() % 0.2) / 0.1)],
+                sprites.hero.anims["walk"][int((rl.get_time() % 0.2) / 0.1)],
                 state.player.flip,
             )
-        elif input_tween.__name__ == 'wait':
-
-            print(int(t * len(sprites.hero.anims['bonk'])))
+        elif input_tween.__name__ == "wait":
             sprites.hero.draw_frame(
                 state.player.pos * GRID_SIZE,
-                sprites.hero.anims['bonk'][int(t * len(sprites.hero.anims['bonk']))],
+                sprites.hero.anims["bonk"][int(t * len(sprites.hero.anims["bonk"]))],
                 state.player.flip,
             )
+            if t > 0.8:
+                bonked_tile_pos = V2(
+                    state.player.pos.x + (-1 if state.player.flip else 1),
+                    state.player.pos.y,
+                )
+                trap_coros[bonked_tile_pos] = wait(3)
     else:
-        sprites.hero.draw_frame(state.player.pos * GRID_SIZE,
-                                sprites.hero.anims['idle'][int((rl.get_time() % 5) > 4.9)],
-                                state.player.flip)
+        sprites.hero.draw_frame(
+            state.player.pos * GRID_SIZE,
+            sprites.hero.anims["idle"][int((rl.get_time() % 5) > 4.9)],
+            state.player.flip,
+        )
 
     for i in range(GRID_COUNT):
         # rl.draw_line(0, i * GRID_SIZE, GRID_COUNT * GRID_SIZE, i * GRID_SIZE, rl.WHITE)
@@ -341,6 +393,30 @@ def step_game(state):
                         rl.WHITE,
                     )
 
+    for dart_i, dart in enumerate(state.darts):
+        dart.pos += dart.vel
+        dart_rect = rl.Rectangle(dart.pos.x, dart.pos.y, 5, 1)
+        rl.draw_rectangle_rec(dart_rect, rl.WHITE)
+        destroy_dart = False
+        for knight_i, knight in enumerate(state.knights):
+            if rl.check_collision_recs(dart_rect, knight.rect()):
+                del state.knights[knight_i]
+                destroy_dart = True
+                break
+
+        destroy_dart |= rl.check_collision_recs(
+            dart_rect,
+            rl.Rectangle(
+                state.player.pos.x * GRID_SIZE,
+                state.player.pos.y * GRID_SIZE,
+                sprites.hero.width,
+                sprites.hero.texture.height,
+            ),
+        )
+
+        if destroy_dart:
+            del state.darts[dart_i]
+
     for i, knight in enumerate(state.knights):
         goal = knight.path[knight.path_i] * GRID_SIZE
         diff = goal - knight.pos
@@ -356,6 +432,26 @@ def step_game(state):
         else:
             knight.pos += (diff / l) * 0.6
         sprites.knight.draw_frame(knight.pos, int((rl.get_time() % 0.2) / 0.1), False)
+
+    for trap_coord in trap_coros:
+        t = 0
+        try:
+            t = next(trap_coros[trap_coord])
+        except StopIteration:
+            if trap_coros[trap_coord].__name__ == "wait":
+                trap_coros[trap_coord] = killer_pillar(state, V2(*trap_coord))
+            else:
+                assert False, trap_coros[trap_coord].__name__
+
+        if trap_coros[trap_coord].__name__ == "wait" and t < (0.1 / 3):
+            shake_vec = V2(noise(rl.get_time() * 10), noise(rl.get_time() * 10 + 4)) * 4
+            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE + shake_vec, sprites.pillar.anims['snuffed'][0], False)
+        elif trap_coros[trap_coord].__name__ == "wait" and t > 1 - (0.1 / 3):
+            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE + V2(0, -2), sprites.pillar.anims['snuffed'][0], False)
+        elif trap_coros[trap_coord].__name__ == "wait":
+            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE, sprites.pillar.anims['snuffed'][0], False)
+        else:
+            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE, sprites.pillar.anims['lit'][int((rl.get_time() % 0.3) / 0.1)], False)
 
     # rl.draw_line(
     #     0,

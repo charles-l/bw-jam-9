@@ -10,7 +10,6 @@ rl.set_target_fps(60)
 
 import game  # noqa
 state = game.state
-orig_state = copy.deepcopy(state)
 error = None
 
 while not rl.window_should_close():
