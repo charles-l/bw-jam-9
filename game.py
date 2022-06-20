@@ -2,8 +2,10 @@ import pyray as rl
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional, Dict, TypeVar, NewType, Union, Generator
 from types import SimpleNamespace as Namespace
-import math
 from perlin_noise import PerlinNoise
+
+import itertools
+import math
 
 noise = PerlinNoise()
 
@@ -176,39 +178,60 @@ state = Namespace(
         flip=False,
     ),
     knights=[],
-    darts=[Dart(V2(200, 10), V2(-2, 0))],
+    darts=[],
 )
 
 LEVEL1 = """\
-.......-................
-.......-................
-.......-................
 .......-...w............
 .......-...w............
 .......-...w............
-.......-...w-----.......
-.......-....-...-.......
-.......------...--......
+.......-...w............
+...>...-...w............
+.......-...w............
+.......-...w............
+...>...-...w............
+.......-...w............
+.......-...w............
+.......-................
+.......-................
+.......-----------......
 .................-......
 .................-......
-.................-......
-.................-......
-.................-......
-.................-......
-..............>..-......
-.................-......
-.................-......
-.................-......
-.................-......
-.................-......
-.................-......
-.................-......
-.................-......\
+...........w.....-......
+...........w.....-......
+...........w.....-......
+...........w.....-......
+...........w.....-......
+...........w.....-......
+...........w.....-......
+...........w.....-......
+...........w.....-......\
 """.split(
     "\n"
 )
 
 cur_level = LEVEL1
+path = []
+
+
+def level_1():
+    global cur_level, path
+    cur_level = LEVEL1
+
+    for x in wait(4):
+        yield
+
+    path = find_path(cur_level)
+
+    state.knights.append(Knight(path, 0, path[0] * GRID_SIZE))
+    state.knights.append(Knight(path, 0, path[0] * GRID_SIZE + V2(0, 20)))
+    state.knights.append(Knight(path, 0, path[0] * GRID_SIZE + V2(0, 40)))
+    state.knights.append(Knight(path, 0, path[0] * GRID_SIZE + V2(0, 60)))
+    state.knights.append(Knight(path, 0, path[0] * GRID_SIZE + V2(0, 80)))
+
+    while state.knights:
+        yield
+
 
 
 def tile_free(state, tile):
@@ -238,7 +261,7 @@ sprites.load(
 
 def find_path(level):
     def find_start():
-        for y, row in enumerate(level):
+        for y, row in reversed(list(enumerate(level))):
             for x, v in enumerate(row):
                 if v == "-":
                     return V2(x, y)
@@ -247,7 +270,7 @@ def find_path(level):
     cur = find_start()
     path = [cur]
     visited = {cur}
-    while cur.y < len(level) - 1:
+    while cur.y > 0:
         for d in [V2(-1, 0), V2(1, 0), V2(0, -1), V2(0, 1)]:
             n = cur + d
             if (
@@ -263,28 +286,21 @@ def find_path(level):
     return path
 
 
-path = find_path(cur_level)
-state.knights.append(Knight(path, 0, path[0]))
-state.knights.append(Knight(path, 0, path[0] - V2(0, 20)))
-state.knights.append(Knight(path, 0, path[0] - V2(0, 40)))
-state.knights.append(Knight(path, 0, path[0] - V2(0, 60)))
-state.knights.append(Knight(path, 0, path[0] - V2(0, 80)))
-
-
-def killer_pillar(state, pos: V2):
+def killer_pillar(pos: V2):
     last_time = rl.get_time()
     while True:
+        state = yield
         if rl.get_time() - last_time > 1:
             state.darts.append(Dart(pos * GRID_SIZE + V2(10, 5), V2(2, 0)))
             last_time = rl.get_time()
-        yield
 
 
 trap_coros = {}
 for y, row in enumerate(cur_level):
     for x, v in enumerate(row):
         if v == ">" or v == "<":
-            trap_coros[(x, y)] = killer_pillar(state, V2(x, y))
+            trap_coros[(x, y)] = killer_pillar(V2(x, y))
+            next(trap_coros[(x, y)])
 
 
 def tween(pos: V2, target: V2, time: float):
@@ -304,10 +320,38 @@ def wait(time: float):
         yield (rl.get_time() - start) / time
 
 
+def shake(time: float):
+    x = wait(time)
+    for t in x:
+        _ = yield(t)
+
+
+def final_screen():
+    global state
+    state = Namespace(
+        player=Namespace(
+            pos=V2(0, 0),
+            next_pos=V2(0, 0),
+            flip=False,
+        ),
+        knights=[],
+        darts=[],
+    )
+    while True:
+        yield
+
+
+
 input_tween = None
+
+level_coro = itertools.chain(
+    level_1(),
+    final_screen()
+    )
 
 
 def step_game(state):
+    next(level_coro)
     global input_tween
     t = 0
 
@@ -323,6 +367,14 @@ def step_game(state):
     if rl.is_key_down(rl.KEY_DOWN):
         move = V2(0, 1)
 
+    if input_tween is not None:
+        try:
+            t = next(input_tween)
+        except StopIteration:
+            input_tween = None
+
+    # input handler needs to be separate from above if statement to enable
+    # keep movement smooth when tween ends
     if input_tween is None:
         if rl.is_key_pressed(rl.KEY_SPACE):
             input_tween = wait(0.2)
@@ -333,12 +385,8 @@ def step_game(state):
             if next_pos != state.player.pos and tile_free(state, next_pos):
                 input_tween = tween(state.player.pos, next_pos, 0.2)
                 state.player.next_pos = next_pos
-    else:
-        try:
-            t = next(input_tween)
-        except StopIteration:
-            input_tween = None
 
+    # draw after all updates
     if input_tween is not None:
         if input_tween.__name__ == "tween":
             sprites.hero.draw_frame(
@@ -357,7 +405,9 @@ def step_game(state):
                     state.player.pos.x + (-1 if state.player.flip else 1),
                     state.player.pos.y,
                 )
-                trap_coros[bonked_tile_pos] = wait(3)
+                if bonked_tile_pos in trap_coros:
+                    trap_coros[bonked_tile_pos] = shake(3)
+                    next(trap_coros[bonked_tile_pos])
     else:
         sprites.hero.draw_frame(
             state.player.pos * GRID_SIZE,
@@ -366,9 +416,6 @@ def step_game(state):
         )
 
     for i in range(GRID_COUNT):
-        # rl.draw_line(0, i * GRID_SIZE, GRID_COUNT * GRID_SIZE, i * GRID_SIZE, rl.WHITE)
-        # rl.draw_line(i * GRID_SIZE, 0, i * GRID_SIZE, GRID_COUNT * GRID_SIZE, rl.WHITE)
-
         for j, c in enumerate(cur_level[i]):
             if c == "w":
                 rl.draw_rectangle(
@@ -404,15 +451,25 @@ def step_game(state):
                 destroy_dart = True
                 break
 
-        destroy_dart |= rl.check_collision_recs(
-            dart_rect,
-            rl.Rectangle(
-                state.player.pos.x * GRID_SIZE,
-                state.player.pos.y * GRID_SIZE,
-                sprites.hero.width,
-                sprites.hero.texture.height,
-            ),
-        )
+        if (
+            0 <= dart.pos.x < GRID_SIZE * GRID_COUNT
+            and 0 <= dart.pos.y < GRID_SIZE * GRID_COUNT
+        ):
+            destroy_dart |= (
+                cur_level[int(dart.pos.y / GRID_SIZE)][int(dart.pos.x / GRID_SIZE)]
+                == "w"
+            )
+            destroy_dart |= rl.check_collision_recs(
+                dart_rect,
+                rl.Rectangle(
+                    state.player.pos.x * GRID_SIZE,
+                    state.player.pos.y * GRID_SIZE,
+                    sprites.hero.width,
+                    sprites.hero.texture.height,
+                ),
+            )
+        else:
+            destroy_dart = True
 
         if destroy_dart:
             del state.darts[dart_i]
@@ -436,37 +493,37 @@ def step_game(state):
     for trap_coord in trap_coros:
         t = 0
         try:
-            t = next(trap_coros[trap_coord])
+            t = trap_coros[trap_coord].send(state)
         except StopIteration:
-            if trap_coros[trap_coord].__name__ == "wait":
-                trap_coros[trap_coord] = killer_pillar(state, V2(*trap_coord))
+            if trap_coros[trap_coord].__name__ == "shake":
+                trap_coros[trap_coord] = killer_pillar(V2(*trap_coord))
+                next(trap_coros[trap_coord])
             else:
                 assert False, trap_coros[trap_coord].__name__
 
-        if trap_coros[trap_coord].__name__ == "wait" and t < (0.1 / 3):
+        if trap_coros[trap_coord].__name__ == "shake" and t < (0.1 / 3):
             shake_vec = V2(noise(rl.get_time() * 10), noise(rl.get_time() * 10 + 4)) * 4
-            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE + shake_vec, sprites.pillar.anims['snuffed'][0], False)
-        elif trap_coros[trap_coord].__name__ == "wait" and t > 1 - (0.1 / 3):
-            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE + V2(0, -2), sprites.pillar.anims['snuffed'][0], False)
-        elif trap_coros[trap_coord].__name__ == "wait":
-            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE, sprites.pillar.anims['snuffed'][0], False)
+            sprites.pillar.draw_frame(
+                V2(*trap_coord) * GRID_SIZE + shake_vec,
+                sprites.pillar.anims["snuffed"][0],
+                False,
+            )
+        elif trap_coros[trap_coord].__name__ == "shake" and t > 1 - (0.1 / 3):
+            sprites.pillar.draw_frame(
+                V2(*trap_coord) * GRID_SIZE + V2(0, -2),
+                sprites.pillar.anims["snuffed"][0],
+                False,
+            )
+        elif trap_coros[trap_coord].__name__ == "shake":
+            sprites.pillar.draw_frame(
+                V2(*trap_coord) * GRID_SIZE, sprites.pillar.anims["snuffed"][0], False
+            )
         else:
-            sprites.pillar.draw_frame(V2(*trap_coord) * GRID_SIZE, sprites.pillar.anims['lit'][int((rl.get_time() % 0.3) / 0.1)], False)
-
-    # rl.draw_line(
-    #     0,
-    #     GRID_COUNT * GRID_SIZE,
-    #     GRID_COUNT * GRID_SIZE,
-    #     GRID_COUNT * GRID_SIZE,
-    #     rl.WHITE,
-    # )
-    # rl.draw_line(
-    #     GRID_COUNT * GRID_SIZE,
-    #     0,
-    #     GRID_COUNT * GRID_SIZE,
-    #     GRID_COUNT * GRID_SIZE,
-    #     rl.WHITE,
-    # )
+            sprites.pillar.draw_frame(
+                V2(*trap_coord) * GRID_SIZE,
+                sprites.pillar.anims["lit"][int((rl.get_time() % 0.3) / 0.1)],
+                False,
+            )
 
     rl.end_mode_2d()
 

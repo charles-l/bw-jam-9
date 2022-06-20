@@ -17,11 +17,13 @@ while not rl.window_should_close():
     rl.clear_background(rl.BLACK)
 
     if rl.is_key_released(rl.KEY_R):
+        print('reload, with state reset')
         error = None
         reload(game)
         state = game.state
 
     if rl.is_key_released(rl.KEY_F5):
+        print('reload')
         error = None
         reload(game)
 
