@@ -19,13 +19,28 @@ while not rl.window_should_close():
     if rl.is_key_released(rl.KEY_R):
         print('reload, with state reset')
         error = None
+        l = state.cur_level
         reload(game)
         state = game.state
+        state.cur_level = l
 
     if rl.is_key_released(rl.KEY_F5):
         print('reload')
         error = None
         reload(game)
+        game.state = state
+
+    if rl.is_key_released(rl.KEY_F6):
+        l = state.cur_level
+        reload(game)
+        state = game.state
+        state.cur_level = l + 1
+
+    if rl.is_key_released(rl.KEY_F4):
+        l = state.cur_level
+        reload(game)
+        state = game.state
+        state.cur_level = l - 1
 
     if error is None:
         try:
