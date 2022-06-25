@@ -115,6 +115,18 @@ class V2:
     def floor(self) -> "V2i":
         return V2i(V2(int(self.x), int(self.y)))
 
+    def round(self):
+        return V2i(
+            V2(
+                int(
+                    math.floor(self.x + 0.5) if self.x >= 0 else math.ceil(self.x - 0.5)
+                ),
+                int(
+                    math.floor(self.y + 0.5) if self.y >= 0 else math.ceil(self.y - 0.5)
+                ),
+            )
+        )
+
     def length(self) -> float:
         return math.sqrt(self.x**2 + self.y**2)
 
@@ -126,6 +138,13 @@ class V2:
 
     def as_rvec(self):
         return rl.Vector2(self.x, self.y)
+
+    def norm(self):
+        l = self.length()
+        if l:
+            return self / l
+        else:
+            return V2(0, 0)
 
 
 V2i = NewType("V2i", V2)
@@ -190,7 +209,8 @@ class Sprites:
 
 
 class Knight:
-    __slots__ = ('path_i', 'pos', 'flipped', 'coro')
+    __slots__ = ("path_i", "pos", "flipped", "coro")
+
     def __init__(self, path_i: int, pos: V2, flipped: bool = False):
         self.path_i = path_i
         self.pos = pos
@@ -223,7 +243,7 @@ def knight_brain(self):
                     ):
                         yield from wait(0.1, C("slice", frame=0))
                         yield from wait(0.1, C("slice", frame=1))
-                        hit(next_goal)
+                        hit(next_goal, diff.norm())
                         yield from wait(0.1, C("slice", frame=2))
         else:
             self.pos += (diff / l) * 0.6
@@ -236,6 +256,49 @@ class Dart:
     vel: V2
 
 
+class Bomb:
+    pos: V2
+    move_coro: Optional[Generator[None, None, None]]
+    anim_coro: Any
+
+    def __init__(
+        self, pos: V2, move_coro: Optional[Generator[None, None, None]], live=False
+    ):
+        self.pos = pos
+        self.move_coro = move_coro
+        if live:
+            self.anim_coro = self.anim()
+        else:
+            self.anim_coro = None
+
+    def anim(self):
+        for i in range(sprites.bomb.frames):
+            yield from wait(0.2, C("anim", frame=i))
+
+        self.explode()
+        explode_sprite(self.pos)
+
+    def hit(self, d):
+        goal = (self.pos // GRID_SIZE + d).round()
+        if tile_free(state, goal):
+            self.move_coro = tween(self.pos, goal * GRID_SIZE, 0.5)
+        self.anim_coro = self.anim()
+
+    def explode(self):
+        for d in [
+            V2(-1, -1),
+            V2(0, -1),
+            V2(1, -1),
+            V2(-1, 0),
+            V2(0, 0),
+            V2(1, 0),
+            V2(-1, 1),
+            V2(0, 1),
+            V2(1, 1),
+        ]:
+            hit((((self.pos / GRID_SIZE) + d)).floor(), d, destroy=True)
+
+
 @dataclass(slots=True)
 class Wall:
     pass
@@ -245,8 +308,35 @@ class Wall:
 class BreakWall:
     health: int = 10
 
-    def hit(self):
+    def hit(self, d):
         self.health -= 1
+
+
+class Cannon:
+    def __init__(self, pos, flipped=False):
+        self.pos = pos
+        self.coro = self.fire()
+        self.flipped = flipped
+
+    def fire(self):
+        while True:
+            yield from wait(4, C("anim", frame=0))
+            d = -1 if self.flipped else 1
+            goal = self.pos + V2(d, 0)
+            for i in range(5):
+                if not tile_free(state, goal + V2(d, 0)):
+                    break
+                goal += V2(d, 0)
+
+            b = Bomb(self.pos * GRID_SIZE, None, live=True)
+            b.move_coro = tween(b.pos, goal * GRID_SIZE, 1.5)
+            state.bombs.append(b)
+            yield from wait(0.1, C("anim", frame=1))
+            yield from wait(0.1, C("anim", frame=2))
+            yield from wait(0.1, C("anim", frame=3))
+
+    def hit(self, d):
+        pass
 
 
 @dataclass(slots=True)
@@ -271,7 +361,7 @@ class Pillar:
         yield from wait(3.0, "disable")
         yield from wait(0.2, "telegraph")
 
-    def hit(self):
+    def hit(self, d):
         self.coro = self.stun()
 
     def update(self):
@@ -317,12 +407,13 @@ state = Namespace(
     ),
     knights=[],
     darts=[],
+    bombs=[],
     path=[],
     cur_level=0,
 )
 
 LEVEL1 = """\
-.......-...w............
+wwww...-...w............
 .......-...w............
 .......-...w............
 .......-...w............
@@ -353,13 +444,13 @@ LEVEL1 = """\
 LEVEL2 = """\
 .......-................
 ...>...-................
-.......-................
+wwwwwww*ww....wwwwwwwwww
 .......-...<............
 .......-................
 .......-................
 .......-................
-.......-...<............
 .......-................
+.......-...<............
 .......-................
 ...>...-................
 .......-................
@@ -379,13 +470,41 @@ LEVEL2 = """\
     "\n"
 )
 
+LEVEL3 = """\
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................
+-.....B.............<...
+-...........B..B.B......
+-.........B.B.B.B.B.<...
+-...........B..B.B......
+-...................<...
+-.......................
+-.......................
+-...............).......
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................
+-.......................\
+""".split(
+    "\n"
+)
+
 Tile = Union[Wall, BreakWall, Pillar]
 
 foreground_layer: Dict[Tuple[int, int], Tile] = {}
 
 
 def load_level(level):
-    print("load level", state)
     foreground_layer.clear()
     for y, row in enumerate(level):
         for x, c in enumerate(row):
@@ -397,6 +516,10 @@ def load_level(level):
                 foreground_layer[(x, y)] = Pillar(V2(x, y), flipped=False)
             elif c == "<":
                 foreground_layer[(x, y)] = Pillar(V2(x, y), flipped=True)
+            elif c == ")":
+                foreground_layer[(x, y)] = Cannon(V2(x, y), flipped=True)
+            elif c == "B":
+                state.bombs.append(Bomb(V2(x, y) * GRID_SIZE, None))
             elif c == "p":
                 state.player.pos = V2(x, y)
 
@@ -405,8 +528,7 @@ def load_level(level):
 
 def level_1():
     load_level(LEVEL1)
-    for x in wait(4):
-        yield
+    yield from wait(4)
 
     state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
     state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
@@ -420,8 +542,7 @@ def level_1():
 
 def level_2():
     load_level(LEVEL2)
-    for x in wait(2):
-        yield
+    yield from wait(2)
 
     state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
     state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
@@ -433,12 +554,19 @@ def level_2():
         yield
 
 
+def level_3():
+    load_level(LEVEL3)
+    while True:
+        yield
+
+
 def tile_free(state, tile):
     return (
         (tile.x, tile.y) not in foreground_layer
         and tile != state.player.pos
         and tile != state.player.next_pos
         and all(state.path[k.path_i] != tile for k in state.knights)
+        and all((bomb.pos / GRID_SIZE).round() != tile for bomb in state.bombs)
     )
 
 
@@ -457,6 +585,9 @@ sprites.load(
     anims={"lit": [0, 1, 2], "snuffed": [3]},
 )
 sprites.load("breakwall.png", 4)
+sprites.load("bomb.png", nframes=10)
+sprites.load("cannon.png", nframes=4)
+sprites.load("explosion.png", nframes=4)
 
 
 def find_path(level):
@@ -516,31 +647,59 @@ def final_screen():
 
 input_tween = None
 
-level_coros = [level_1(), level_2(), final_screen()]
+level_coros = [level_1(), level_2(), level_3(), final_screen()]
+explosions = []
 
 
-class ContextStr:
-    def __init__(self, s: str, **kwargs: Dict[str, Any]):
-        self.str = s
-        self.ctx = kwargs
-
-    def __eq__(self, other):
-        if isinstance(other, str):
-            return self.str == other
+class ContextStr(str):
+    def __new__(cls, value, **kwargs):
+        obj = str.__new__(cls, value)
+        obj.ctx = kwargs
+        return obj
 
     def __getitem__(self, k):
         return self.ctx[k]
 
+
 C = ContextStr
 
 
-def hit(pos: V2):
+def hit(pos: V2, d: V2, destroy=False):
     if state.player.pos.floor() == pos:
         state.player.shake_amount = 4
 
+    for bomb in state.bombs:
+        if (bomb.pos / GRID_SIZE).floor() == pos:
+            bomb.hit(d)
+
     p = (pos[0], pos[1])
     if p in foreground_layer and hasattr(foreground_layer[p], "hit"):
-        foreground_layer[p].hit()
+        foreground_layer[p].hit(d)
+        if destroy:
+            explode_sprite(pos * GRID_SIZE, delay=0.1)
+            del foreground_layer[p]
+
+
+def player_bonk():
+    yield from wait(0.1, C("bonk", frame=0))
+    yield from wait(0.1, C("bonk", frame=1))
+    bonked_tile_pos = V2(
+        state.player.pos.x + (-1 if state.player.flip else 1),
+        state.player.pos.y,
+    )
+    hit(bonked_tile_pos, (bonked_tile_pos - state.player.pos).norm())
+    yield from wait(0.1, C("bonk", frame=2))
+
+
+def _explode_coro(pos):
+    for i in range(sprites.explosion.frames):
+        for _ in wait(0.1):
+            sprites.explosion.draw_frame(pos, i, False)
+            yield
+
+
+def explode_sprite(pos, delay=0):
+    explosions.append(itertools.chain(wait(delay), _explode_coro(pos)))
 
 
 def step_game(state):
@@ -565,11 +724,7 @@ def step_game(state):
 
     if input_tween is None:
         if rl.is_key_pressed(rl.KEY_SPACE):
-            input_tween = itertools.chain(
-                wait(0.1, C("bonk", frame=0)),
-                wait(0.1, C("bonk", frame=1)),
-                wait(0.1, C("bonk", frame=2)),
-            )
+            input_tween = player_bonk()
         if move:
             state.player.flip = move.x < 0 if abs(move.x) > 0 else state.player.flip
             next_pos = (state.player.pos + move).clamp(0, GRID_COUNT - 1).floor()
@@ -605,16 +760,9 @@ def step_game(state):
         elif input_state == "bonk":
             sprites.hero.draw_frame(
                 state.player.pos * GRID_SIZE,
-                sprites.hero.anims["bonk"][input_state['frame']],
+                sprites.hero.anims["bonk"][input_state["frame"]],
                 state.player.flip,
             )
-            if input_state['frame'] > 1:
-                bonked_tile_pos = V2(
-                    state.player.pos.x + (-1 if state.player.flip else 1),
-                    state.player.pos.y,
-                )
-                if bonked_tile_pos in foreground_layer:
-                    hit(bonked_tile_pos)
         else:
             assert False, input_state
     else:
@@ -631,9 +779,21 @@ def step_game(state):
                 pos[0] * GRID_SIZE, pos[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE, rl.WHITE
             )
         if isinstance(tile, BreakWall):
-            sprites.breakwall.draw_frame(V2(pos[0] * GRID_SIZE, pos[1] * GRID_SIZE), int((1 - (tile.health / 10)) * 4), False)
+            sprites.breakwall.draw_frame(
+                V2(pos[0] * GRID_SIZE, pos[1] * GRID_SIZE),
+                int((1 - (tile.health / 10)) * 4),
+                False,
+            )
             if tile.health <= 0:
                 tiles_to_del.append(pos)
+        elif isinstance(tile, Cannon):
+            tile_state = next(tile.coro)
+            assert tile_state == "anim"
+            sprites.cannon.draw_frame(
+                V2(*pos) * GRID_SIZE,
+                tile_state["frame"],
+                tile.flipped,
+            )
         elif isinstance(tile, Pillar):
             tile_state = tile.update()
             if tile_state == "shake":
@@ -676,6 +836,23 @@ def step_game(state):
             line_width,
             rl.WHITE,
         )
+
+    for bomb_i, bomb in enumerate(state.bombs):
+        if bomb.move_coro:
+            try:
+                next(bomb.move_coro)
+            except StopIteration:
+                bomb.move_coro = None
+
+        if bomb.anim_coro:
+            try:
+                s = next(bomb.anim_coro)
+                if s == "anim":
+                    sprites.bomb.draw_frame(bomb.pos, s["frame"], False)
+            except StopIteration:
+                del state.bombs[bomb_i]
+        else:
+            sprites.bomb.draw(bomb.pos)
 
     for dart_i, dart in enumerate(state.darts):
         dart.pos += dart.vel
@@ -734,6 +911,12 @@ def step_game(state):
             )
         else:
             assert False
+
+    for i, explosion in enumerate(explosions):
+        try:
+            next(explosion)
+        except StopIteration:
+            del explosions[i]
 
     rl.end_mode_2d()
 
