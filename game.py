@@ -17,6 +17,7 @@ from types import SimpleNamespace as Namespace
 from perlin_noise import PerlinNoise
 import math
 import itertools
+import sys
 
 noise = PerlinNoise()
 
@@ -43,7 +44,7 @@ class NamedCoro:
     def __init__(
         self,
         name: Optional[str],
-        *generators: List[Generator[None, None, None] | "NamedCoro"]
+        *generators: List[Generator[None, None, None] | "NamedCoro"],
     ):
         self.generators = list(generators)
         self._name = name
@@ -150,6 +151,10 @@ class V2:
         return (self.x, self.y)
 
 
+class V2Pause(V2):
+    pass
+
+
 V2i = NewType("V2i", V2)
 VecType = Union[V2i, V2]
 
@@ -215,6 +220,10 @@ class DeadKnight:
     pass
 
 
+class Planks:
+    pass
+
+
 class Knight:
     __slots__ = ("path_i", "pos", "flipped", "coro")
 
@@ -245,16 +254,17 @@ def knight_brain(self):
                     return "pass"
                 else:
                     next_goal = state.path[self.path_i + 1]
+                    self.flipped = ((next_goal * GRID_SIZE) - self.pos).x < 0
                     if tile_free(state, next_goal):
-                        self.flipped = (next_goal * GRID_SIZE - self.pos).x < 0
                         self.path_i += 1
                     else:
                         if not any(
-                            (k.pos / GRID_SIZE).floor() == next_goal for k in state.knights
+                            (k.pos / GRID_SIZE).floor() == next_goal
+                            for k in state.knights
                         ):
                             yield from wait(0.1, C("slice", frame=0))
                             yield from wait(0.1, C("slice", frame=1))
-                            hit(next_goal, diff.norm())
+                            hit(next_goal, (next_goal - self.pos).norm())
                             yield from wait(0.1, C("slice", frame=2))
             else:
                 self.pos += (diff / l) * 0.6
@@ -415,8 +425,24 @@ GRID_SIZE = 16
 
 if __name__ == "__main__":
     rl.init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "game")
+    rl.init_audio_device()
 
 FONT = rl.load_font("TimesNewPixel.fnt", 16)
+
+rl.gui_set_font(FONT)
+rl.gui_set_style(rl.DEFAULT, rl.TEXT_SIZE, 32)
+
+rl.gui_set_style(rl.DEFAULT, rl.BASE_COLOR_NORMAL, 0)
+rl.gui_set_style(rl.DEFAULT, rl.BORDER_COLOR_NORMAL, -1)
+rl.gui_set_style(rl.DEFAULT, rl.TEXT_COLOR_NORMAL, -1)
+
+rl.gui_set_style(rl.DEFAULT, rl.BASE_COLOR_FOCUSED, -1)
+rl.gui_set_style(rl.DEFAULT, rl.BORDER_COLOR_FOCUSED, 0)
+rl.gui_set_style(rl.DEFAULT, rl.TEXT_COLOR_FOCUSED, 0)
+
+rl.gui_set_style(rl.DEFAULT, rl.BASE_COLOR_PRESSED, -1)
+rl.gui_set_style(rl.DEFAULT, rl.BORDER_COLOR_PRESSED, -1)
+rl.gui_set_style(rl.DEFAULT, rl.TEXT_COLOR_PRESSED, 0)
 
 # TODO: look at updating makeStructHelper to allow kwargs along with positional args.
 camera = rl.Camera2D(
@@ -443,6 +469,36 @@ state = Namespace(
     cur_level=0,
 )
 
+INTRO = """\
+........................
+........................
+........................
+........................
+wwwwwwwwwwwwwwwwwwwwwwww
+........................
+.................P......
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................
+........................\
+""".split(
+    "\n"
+)
+
+
 LEVEL1 = """\
 wwww...-...w............
 .......-...w............
@@ -456,7 +512,7 @@ wwww...-...w............
 .......-...w............
 .......-................
 .......-................
-...p...-----------......
+...P...-----------......
 .................-......
 .................-......
 ...........w.....-......
@@ -485,7 +541,7 @@ wwwwwww*ww....wwwwwwwwww
 .......-................
 ..>..B.-................
 .......-................
-...p...-................
+...P...-................
 .......-................
 .......-................
 .......-................
@@ -520,7 +576,7 @@ LEVEL3 = """\
 -.........-.............
 wwwww....>--...)........
 ...........-............
-...........-....p.......
+...........-....P.......
 ------------............
 -...wwwwwwwwwwwwwwwww...
 ------------............
@@ -549,7 +605,7 @@ wwww*wwwwwww...B.wwwwwww
 .....................-..
 ...............).....-..
 .....................-..
-................p....-..
+................P....-..
 .....................-..
 .....................-..
 ...........-----------..
@@ -560,20 +616,49 @@ wwww*wwwwwww...B.wwwwwww
 )
 
 LEVEL5 = """\
-...........-.....w......
-...........-.<...w......
-...........-..B<.w......
-...........-.<...w......
-...........-..B<.w......
-....--------.<B..w......
-....-......B.....w......
-....-......<.....w......
-....-.....B......w......
-....-......<.....w......
-....-.....B......w......
-wwww*......<B....w......
-wwww*wwwwwww...B.wwwwwww
-....--^^^---............
+...............w-w......
+...............w-w......
+...............w-w......
+...............w-w......
+...............w-w......
+...............w-w......
+...............w-w......
+.........wwwwwww-w......
+........-p--^^---w.....
+........-wwwwwwwww......
+....-----w..............
+....-...................
+....-...ss..............
+....----^^p-....wwwwww..
+...........-....w....w..
+...........-....#....w..
+...........-....wwwwww..
+...........-............
+...........-.....P......
+...........-............
+...........-............
+...........-............
+...........-............
+...........-............\
+""".split(
+    "\n"
+)
+
+CUT_LEVEL = """\
+...........G............
+........................
+........................
+........................
+........................
+##ssssssssssssssssssss..
+........................
+..>.........sssssss.....
+............sssssss.....
+..>.........sssssss.....
+............sssssss.....
+..ssssss................
+..ssssss................
+..ssssss...+............
 ...........-............
 ...........-............
 ...........-............
@@ -588,15 +673,18 @@ wwww*wwwwwww...B.wwwwwww
     "\n"
 )
 
-Tile = Union[Wall, BreakWall, Pillar]
+Tile = Union[Wall, BreakWall, Pillar, DeadKnight, Planks]
 
 foreground_layer: Dict[Tuple[int, int], Tile] = {}
+bgmusic = rl.load_music_stream("bg.mp3")
+rl.play_music_stream(bgmusic)
 
 
-def load_level(level):
+def load_level(level, do_find_path=True):
     foreground_layer.clear()
     state.darts.clear()
     state.bombs.clear()
+    state.knights.clear()
 
     for y, row in enumerate(level):
         for x, c in enumerate(row):
@@ -606,6 +694,10 @@ def load_level(level):
                 foreground_layer[(x, y)] = Wall()
             if c == "^":
                 foreground_layer[(x, y)] = Spikes()
+            if c == "s":
+                foreground_layer[(x, y)] = Spikes()
+            if c == "p":
+                foreground_layer[(x, y)] = Planks()
             elif c == ">":
                 foreground_layer[(x, y)] = Pillar(V2(x, y), flipped=False)
             elif c == "<":
@@ -614,10 +706,243 @@ def load_level(level):
                 foreground_layer[(x, y)] = Cannon(V2(x, y), flipped=True)
             elif c == "B":
                 state.bombs.append(Bomb(V2(x, y) * GRID_SIZE, None))
-            elif c == "p":
+            elif c == "P":
                 state.player.pos = V2(x, y)
 
-    state.path = find_path(level)
+    if do_find_path:
+        state.path = find_path(level)
+
+
+def choice_buttons(*options):
+    sizes = [rl.measure_text_ex(FONT, opt, 32, 1) for opt in options]
+    total_width = sum(v.x + 40 for v in sizes) - 20
+    top_left_x = (SCREEN_WIDTH // 2) - (total_width // 2)
+    top_left_y = SCREEN_HEIGHT - sizes[0].y - 20
+
+    offsetx = top_left_x
+    rl.draw_rectangle(
+        int(top_left_x) - 8, int(top_left_y) - 8, int(total_width) + 16, 20, rl.WHITE
+    )
+    for text, size in zip(options, sizes):
+        if rl.gui_button(
+            rl.Rectangle(offsetx, top_left_y, size.x + 20, size.y + 4), text
+        ):
+            return text
+        offsetx += size.x + 40
+
+
+def intro():
+    global text, portrait, portrait_emotion
+    load_level(INTRO, do_find_path=False)
+
+    yield from wait(0.1)
+
+    portrait = sprites.hero_portrait
+    text = "Yoooo"
+    yield from wait_for_click()
+
+    text = "I'm just chillin'"
+    yield from wait_for_click()
+
+    text = "living the necromanced corpse life."
+    yield from wait_for_click()
+
+    text = "hanging out,"
+    yield from wait_for_click()
+
+    text = "with a stick that's *great* for bonking things"
+    yield from wait_for_click()
+
+    text = "(which you can use by hitting SPACE, btw)"
+    yield from wait_for_click()
+
+    text = "..."
+    yield from wait_for_click()
+
+    portrait_emotion = "sad"
+    text = "You know. It isn't what it's cracked up to be."
+    yield from wait_for_click()
+
+    portrait_emotion = None
+    text = "The necromanced life, I mean. Not the stick."
+    yield from wait_for_click()
+
+    text = "I was once an adventurer like you,"
+    yield from wait_for_click()
+
+    text = "then I took an arrow to the knee."
+    yield from wait_for_click()
+
+    text = "Kidding! A necromancer ripped out my heart."
+    yield from wait_for_click()
+
+    text = "Then he brought me back"
+    yield from wait_for_click()
+
+    text = "to guard his *dumb* castle."
+    yield from wait_for_click()
+
+    portrait_emotion = None
+    text = "And I've been stuck at this"
+    yield from wait_for_click()
+
+    portrait_emotion = "anger"
+    text = "FOR 500 YEARS!"
+    yield from wait_for_click()
+
+    portrait_emotion = "sad"
+    text = "*sigh*"
+    yield from wait_for_click()
+
+    portrait_emotion = None
+    text = "If only I could ~conveniently~ trigger"
+    yield from wait_for_click()
+
+    text = "an event that leads to the downfall of LERMIN."
+    yield from wait_for_click()
+
+    text = "Oh. Yeah. That's the necromancer's name."
+    yield from wait_for_click()
+
+    text = '"Lermin"'
+    yield from wait_for_click()
+
+    text = "I know. Lame."
+    yield from wait_for_click()
+
+    portrait_emotion = "sad"
+    text = "*sigh*"
+    yield from wait_for_click()
+
+    portrait_emotion = "anger"
+    text = "I said: *SIGH*"
+    yield from wait_for_click()
+
+    portrait_emotion = None
+
+    kpos = V2(SCREEN_WIDTH // 2, SCREEN_HEIGHT + 20)
+    k = Knight(0, kpos)
+
+    def knight_coro():
+        yield from tween(kpos, (state.player.pos + V2(1, 0)) * GRID_SIZE, 4, "move")
+        try:
+            while True:
+                yield C("slice", frame=0)
+        except Die:
+            yield "move"
+            return "die"
+
+    k.coro = knight_coro()
+    state.knights.append(k)
+
+    def f():
+        global portrait, text, portrait_emotion
+        portrait = sprites.knight_portrait
+        text = "Ho there!"
+        yield from wait(4)
+
+        text = "You look like a... strapping young skeleton"
+        yield from wait_for_click()
+
+        text = "Perhaps you'd like us to help us?"
+        yield from wait_for_click()
+
+        text = "We're here to defeat the evil sourcerer Lermin."
+        yield from wait_for_click()
+
+        portrait = None
+        text = "Help overflow Lermin?"
+        while (choice := choice_buttons("yes", "no")) is None:
+            yield
+
+        if choice == "no":
+            portrait = sprites.knight_portrait
+            text = "Curses."
+            yield from tween(kpos, V2(SCREEN_WIDTH // 2, SCREEN_HEIGHT + 20), 4)
+
+        if choice == "yes":
+            yield
+            portrait = sprites.knight_portrait
+            text = "Wonderful!"
+            yield from wait_for_click()
+
+            text = "All you have to do is direct us,"
+            yield from wait_for_click()
+
+            text = "let us know where all the traps are,"
+            yield from wait_for_click()
+
+            text = "mark our path,"
+            yield from wait_for_click()
+
+            text = "provide us with resources,"
+            yield from wait_for_click()
+
+            text = "act as a human-"
+            yield from wait_for_click()
+
+            text = "-err... skeleton shield,"
+            yield from wait_for_click()
+
+            text = "give orders,"
+            yield from wait_for_click()
+
+            text = "take orders,"
+            yield from wait_for_click()
+
+            text = "and withstand any and all attacks from Lermin."
+            yield from wait_for_click()
+
+            portrait = sprites.hero_portrait
+            portrait_emotion = "anger"
+            text = "..."
+            yield from wait_for_click()
+
+            portrait = sprites.knight_portrait
+            portrait_emotion = None
+
+            text = "Also! Nobody can know you're working with us."
+            yield from wait_for_click()
+
+            text = "Bad optics and all. I'm sure you understand."
+            yield from wait_for_click()
+
+            text = "So if you stand next to me,"
+            yield from wait_for_click()
+
+            text = "or anyone else, we *will* hit you."
+            yield from wait_for_click()
+
+            portrait = sprites.hero_portrait
+            portrait_emotion = "anger"
+            text = "..."
+            yield from wait_for_click()
+
+            portrait_emotion = "sad"
+            text = "Fine... let's get this over with."
+            yield from wait_for_click()
+
+    it = f()
+    for _ in it:
+        if not state.knights:
+            portrait = sprites.hero_portrait
+            portrait_emotion = None
+            text = "Oops."
+            yield from wait_for_click()
+
+            text = "Welp, I guess that's another uprising quelled."
+            yield from wait_for_click()
+
+            portrait = None
+            text = "Game completed (Ending 1): the any% route"
+            yield from wait_for_click()
+
+            sys.exit(0)
+        else:
+            yield
+
+    text = ""
+    portrait = None
 
 
 def level_1():
@@ -690,13 +1015,50 @@ def level_5():
         yield
 
 
+def cut_level_1():
+    load_level(CUT_LEVEL)
+    yield from wait(2)
+
+    state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
+    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
+    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 40)))
+    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 60)))
+    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 80)))
+
+    while True:
+        if any(
+            (knight.pos / GRID_SIZE).round() == state.path[-1]
+            for knight in state.knights
+        ):
+            break
+        yield
+
+    global text
+    text = "Oh yeah."
+
+    yield from wait(2)
+
+    text = "We're gonna need you to show the rest of the way."
+
+    print("waiting")
+
+    while state.knights:
+        yield
+
+
 def tile_free(state, tile):
     return (
         0 <= tile.x < GRID_COUNT
         and 0 <= tile.y < GRID_COUNT
-        and ((tile.x, tile.y) not in foreground_layer or isinstance(foreground_layer[(tile.x, tile.y)], (Spikes, DeadKnight)))
+        and (
+            (tile.x, tile.y) not in foreground_layer
+            or isinstance(
+                foreground_layer[(tile.x, tile.y)], (Spikes, DeadKnight, Planks)
+            )
+        )
         and tile != state.player.pos
         and tile != state.player.next_pos
+        and state.path
         and all(state.path[k.path_i] != tile for k in state.knights)
         and all((bomb.pos / GRID_SIZE).round() != tile for bomb in state.bombs)
     )
@@ -704,6 +1066,19 @@ def tile_free(state, tile):
 
 sprites = Sprites()
 sprites.load("knight.png", 5, anims={"slice": [0, 2, 3], "dead": [4]})
+sprites.load(
+    "knight_portrait.png", 4, anims={"talk": [0, 1, 2, 3], "idle": [0, 1, 2, 3]}
+)
+sprites.load(
+    "hero_portrait.png",
+    5,
+    anims={
+        "talk": [0, 1],
+        "idle": lambda: [0, 2][int((rl.get_time() % 5) > 4.9)],
+        "anger": [3],
+        "sad": [4],
+    },
+)
 sprites.load(
     "hero.png",
     6,
@@ -721,6 +1096,7 @@ sprites.load("bomb.png", nframes=10)
 sprites.load("cannon.png", nframes=4)
 sprites.load("explosion.png", nframes=5)
 sprites.load("spikes.png", nframes=1)
+sprites.load("planks.png")
 
 
 def find_path(level):
@@ -741,7 +1117,7 @@ def find_path(level):
             if (
                 0 <= n.x < len(level[0])
                 and 0 <= n.y < len(level)
-                and level[n.y][n.x] in "-*^"
+                and level[n.y][n.x] in "-*^+p"
                 and n not in visited
             ):
                 path.append(n)
@@ -749,6 +1125,9 @@ def find_path(level):
                 cur = n
                 break
         steps += 1
+        if level[cur.y][cur.x] == "+":
+            path.append(V2Pause(cur.x, cur.y))
+            break
     return path
 
 
@@ -769,6 +1148,12 @@ def wait(time: float, y: str = "wait"):
         yield y
 
 
+def wait_for_click(y: str = "wait"):
+    while not rl.is_mouse_button_released(rl.MOUSE_BUTTON_LEFT):
+        yield y
+    yield y
+
+
 def final_screen():
     global state
     state.path.clear()
@@ -780,8 +1165,19 @@ def final_screen():
 
 input_tween = None
 
-level_coros = [level_1(), level_2(), level_3(), level_4(), level_5(), final_screen()]
+level_coros = [
+    intro(),
+    level_1(),
+    level_2(),
+    level_3(),
+    level_4(),
+    level_5(),
+    final_screen(),
+]
 explosions = []
+text = ""
+portrait = None
+portrait_emotion = None
 
 
 class ContextStr(str):
@@ -814,11 +1210,16 @@ def hit(pos: V2, d: V2, destroy=False):
             state.knights[i].coro.throw(Die)
 
     p = (pos[0], pos[1])
-    if p in foreground_layer and hasattr(foreground_layer[p], "hit"):
-        foreground_layer[p].hit(d)
-        if destroy:
-            explode_sprite(pos * GRID_SIZE, delay=0.1)
+    if p in foreground_layer:
+        if hasattr(foreground_layer[p], "hit"):
+            foreground_layer[p].hit(d)
+            if destroy:
+                explode_sprite(pos * GRID_SIZE, delay=0.1)
+                del foreground_layer[p]
+        elif isinstance(foreground_layer[p], Planks):
+            newpos = (pos + d).round()
             del foreground_layer[p]
+            foreground_layer[(newpos.x, newpos.y)] = Planks()
 
 
 def player_bonk():
@@ -853,6 +1254,8 @@ def explode_sprite(pos, delay=0, shockwave=False):
 
 def step_game(state):
     global input_tween
+
+    rl.update_music_stream(bgmusic)
 
     try:
         next(level_coros[state.cur_level])
@@ -897,30 +1300,6 @@ def step_game(state):
         * state.player.shake_amount
     )
 
-    # draw after all updates
-    if input_tween is not None:
-        assert input_state is not None
-        if input_state == "move":
-            sprites.hero.draw_frame(
-                state.player.pos * GRID_SIZE + shake_vec,
-                sprites.hero.anims["walk"][int((rl.get_time() % 0.2) / 0.1)],
-                state.player.flip,
-            )
-        elif input_state == "bonk":
-            sprites.hero.draw_frame(
-                state.player.pos * GRID_SIZE,
-                sprites.hero.anims["bonk"][input_state["frame"]],
-                state.player.flip,
-            )
-        else:
-            assert False, input_state
-    else:
-        sprites.hero.draw_frame(
-            state.player.pos * GRID_SIZE + shake_vec,
-            sprites.hero.anims["idle"][int((rl.get_time() % 5) > 4.9)],
-            state.player.flip,
-        )
-
     tiles_to_del = []
     for pos, tile in foreground_layer.items():
         if isinstance(tile, Wall):
@@ -929,6 +1308,10 @@ def step_game(state):
             )
         elif isinstance(tile, Spikes):
             sprites.spikes.draw(
+                V2(pos[0] * GRID_SIZE, pos[1] * GRID_SIZE),
+            )
+        elif isinstance(tile, Planks):
+            sprites.planks.draw(
                 V2(pos[0] * GRID_SIZE, pos[1] * GRID_SIZE),
             )
         elif isinstance(tile, BreakWall):
@@ -991,13 +1374,36 @@ def step_game(state):
         del foreground_layer[p]
 
     for p in state.path:
-        line_width = 1
         rl.draw_rectangle(
-            p[0] * GRID_SIZE + GRID_SIZE // 2 - line_width // 2,
-            p[1] * GRID_SIZE + GRID_SIZE // 2 - line_width // 2,
-            line_width,
-            line_width,
+            p[0] * GRID_SIZE + GRID_SIZE // 2,
+            p[1] * GRID_SIZE + GRID_SIZE // 2,
+            1,
+            1,
             rl.WHITE,
+        )
+
+    # draw after all updates
+    if input_tween is not None:
+        assert input_state is not None
+        if input_state == "move":
+            sprites.hero.draw_frame(
+                state.player.pos * GRID_SIZE + shake_vec,
+                sprites.hero.anims["walk"][int((rl.get_time() % 0.2) / 0.1)],
+                state.player.flip,
+            )
+        elif input_state == "bonk":
+            sprites.hero.draw_frame(
+                state.player.pos * GRID_SIZE,
+                sprites.hero.anims["bonk"][input_state["frame"]],
+                state.player.flip,
+            )
+        else:
+            assert False, input_state
+    else:
+        sprites.hero.draw_frame(
+            state.player.pos * GRID_SIZE + shake_vec,
+            sprites.hero.anims["idle"][int((rl.get_time() % 5) > 4.9)],
+            state.player.flip,
         )
 
     for bomb_i, bomb in enumerate(state.bombs):
@@ -1067,7 +1473,6 @@ def step_game(state):
                 foreground_layer[(knight.pos // GRID_SIZE).astuple()] = DeadKnight()
                 explode_sprite(knight.pos.floor(), delay=0.1)
 
-
         if kstate == "move":
             sprites.knight.draw_frame(
                 knight.pos, int((rl.get_time() % 0.2) / 0.1), knight.flipped
@@ -1087,24 +1492,44 @@ def step_game(state):
         except StopIteration:
             del explosions[i]
 
+    text_pos = rl.measure_text_ex(FONT, text, 32, 1)
+    text_box_width = int(text_pos.x) + 10
+    text_box_height = int(text_pos.y)
+    text_top_left = V2(
+        SCREEN_WIDTH // 2 - text_box_width // 2,
+        SCREEN_HEIGHT - (2 * text_box_height) - 40,
+    )
+
+    if portrait:
+        top_left = (text_top_left // 2) - V2(36, 36)
+        rl.draw_rectangle(
+            int(top_left.x) - 1, int(top_left.y) - 1, 32 + 2, 32 + 2, rl.WHITE
+        )
+        rl.draw_rectangle(int(top_left.x), int(top_left.y), 32, 32, rl.BLACK)
+        anim = portrait_emotion or "idle"
+        if callable(portrait.anims[anim]):
+            frame_i = portrait.anims[anim]()
+        else:
+            frame_i = portrait.anims[anim][
+                int((rl.get_time() % (len(portrait.anims[anim]) * 0.1)) / 0.1)
+            ]
+        portrait.draw_frame(
+            top_left,
+            frame_i,
+            state.player.flip if portrait == sprites.hero_portrait else False,
+        )
     rl.end_mode_2d()
 
     # draw UI
 
-    text = ""
     if text:
-        v = rl.measure_text_ex(FONT, text, 32, 1)
-        text_box_width = int(v.x) + 10
-        text_box_height = int(v.y)
-        top_left = V2(
-            SCREEN_WIDTH // 2 - text_box_width // 2,
-            SCREEN_HEIGHT - text_box_height - 20,
-        )
         rl.draw_rectangle(
-            *top_left - V2(2, 2), text_box_width + 4, text_box_height + 4, rl.WHITE
+            *text_top_left - V2(2, 2), text_box_width + 4, text_box_height + 4, rl.WHITE
         )
-        rl.draw_rectangle(*top_left, text_box_width, text_box_height, rl.BLACK)
-        rl.draw_text_ex(FONT, text, rl.Vector2(*(top_left + V2(4, 2))), 32, 1, rl.WHITE)
+        rl.draw_rectangle(*text_top_left, text_box_width, text_box_height, rl.BLACK)
+        rl.draw_text_ex(
+            FONT, text, rl.Vector2(*(text_top_left + V2(4, 2))), 32, 1, rl.WHITE
+        )
 
 
 if __name__ == "__main__":

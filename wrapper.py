@@ -6,6 +6,7 @@ import copy
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 800
 rl.init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "game")
+rl.init_audio_device()
 rl.set_target_fps(60)
 
 import game  # noqa
