@@ -17,7 +17,7 @@ while not rl.window_should_close():
     rl.begin_drawing()
     rl.clear_background(rl.BLACK)
 
-    if rl.is_key_released(rl.KEY_R):
+    if rl.is_key_released(rl.KEY_Y):
         print('reload, with state reset')
         error = None
         l = state.cur_level

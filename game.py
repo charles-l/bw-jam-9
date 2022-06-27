@@ -18,6 +18,7 @@ from perlin_noise import PerlinNoise
 import math
 import itertools
 import sys
+import copy
 
 noise = PerlinNoise()
 
@@ -238,40 +239,62 @@ class Knight:
             self.pos.x, self.pos.y, sprites.knight.width, sprites.knight.texture.height
         )
 
+def knight_die(self):
+    yield "die"
+    return "die"
+
 
 def knight_brain(self):
-    try:
-        while True:
-            goal = state.path[self.path_i] * GRID_SIZE
-            diff = goal - self.pos
-            l = diff.length()
-            if l < 0.7:
-                self.pos = goal
-                t = (self.pos // GRID_SIZE).floor().astuple()
-                if t in foreground_layer and isinstance(foreground_layer[t], Spikes):
-                    return "die"
-                if not self.path_i + 1 < len(state.path):
-                    return "pass"
-                else:
-                    next_goal = state.path[self.path_i + 1]
-                    self.flipped = ((next_goal * GRID_SIZE) - self.pos).x < 0
-                    if tile_free(state, next_goal):
-                        self.path_i += 1
-                    else:
-                        if not any(
-                            (k.pos / GRID_SIZE).floor() == next_goal
-                            for k in state.knights
-                        ):
-                            yield from wait(0.1, C("slice", frame=0))
-                            yield from wait(0.1, C("slice", frame=1))
-                            hit(next_goal, (next_goal - self.pos).norm())
-                            yield from wait(0.1, C("slice", frame=2))
+    while True:
+        goal = state.path[self.path_i] * GRID_SIZE
+        diff = goal - self.pos
+        l = diff.length()
+        if l < 0.7:
+            self.pos = goal
+            t = (self.pos // GRID_SIZE).floor().astuple()
+            if t in foreground_layer and isinstance(foreground_layer[t], Spikes):
+                return "die"
+            if not self.path_i + 1 < len(state.path):
+                return "pass"
             else:
-                self.pos += (diff / l) * 0.6
-            yield "move"
-    except Die:
+                next_goal = state.path[self.path_i + 1]
+                self.flipped = ((next_goal * GRID_SIZE) - self.pos).x < 0
+                if tile_free(state, next_goal):
+                    self.path_i += 1
+                else:
+                    if not any(
+                        (k.pos / GRID_SIZE).floor() == next_goal
+                        for k in state.knights
+                    ):
+                        yield from wait(0.1, C("slice", frame=0))
+                        yield from wait(0.1, C("slice", frame=1))
+                        hit(next_goal, (next_goal - self.pos).norm())
+                        yield from wait(0.1, C("slice", frame=2))
+        else:
+            self.pos += (diff / l) * 0.6
         yield "move"
-        return "die"
+
+
+@dataclass(slots=True)
+class Lermin:
+    pos: V2
+    coro: Any = None
+    vulnerable: bool = False
+
+    def drop_bombs(self):
+        while True:
+            yield from wait(4)
+            launch_bomb((self.pos / GRID_SIZE).round(), V2(0, 1), 2)
+            launch_bomb((self.pos / GRID_SIZE).round(), V2(1, 1), 1)
+            launch_bomb((self.pos / GRID_SIZE).round(), V2(-1, 1), 1)
+
+
+    def hit(self, d):
+        if self.vulnerable:
+            explode_sprite(self.pos.floor(), delay=0.1)
+            explode_sprite(self.pos.floor() + V2(0.1, 0.3), delay=0.4)
+            explode_sprite(self.pos.floor() - V2(-0.3, -0.1), delay=0.8)
+            state.boss = None
 
 
 @dataclass(slots=True)
@@ -359,6 +382,16 @@ def find_open_tile(start_pos, direction, max_dist):
     return goal
 
 
+def launch_bomb(pos: V2, d: V2, max_dist):
+    goal = find_open_tile(pos, d, max_dist)
+
+    b = Bomb(pos * GRID_SIZE, None, live=True)
+    b.move_coro = tween(
+        b.pos, goal * GRID_SIZE, (goal - pos).length() / max_dist
+    )
+    state.bombs.append(b)
+
+
 class Cannon:
     def __init__(self, pos, fire_dist=6, flipped=False):
         self.pos = pos
@@ -370,13 +403,7 @@ class Cannon:
         while True:
             yield from wait(4, C("anim", frame=0))
             d = -1 if self.flipped else 1
-            goal = find_open_tile(self.pos, V2(d, 0), self.fire_dist)
-
-            b = Bomb(self.pos * GRID_SIZE, None, live=True)
-            b.move_coro = tween(
-                b.pos, goal * GRID_SIZE, (goal - self.pos).length() / self.fire_dist
-            )
-            state.bombs.append(b)
+            launch_bomb(self.pos, V2(d, 0), self.fire_dist)
             yield from wait(0.1, C("anim", frame=1))
             yield from wait(0.1, C("anim", frame=2))
             yield from wait(0.1, C("anim", frame=3))
@@ -466,14 +493,18 @@ state = Namespace(
         next_pos=V2(0, 0),
         flip=False,
         shake_amount=0,
+        alive=True,
     ),
     knights_alive=15,
     knights=[],
     darts=[],
     bombs=[],
     path=[],
+    boss=None,
     cur_level=0,
 )
+
+starting_knights_alive = state.knights_alive
 
 INTRO = """\
 ww2wwwwwwwwwwwwwwwww2www
@@ -536,7 +567,7 @@ wwww...-...w............
 
 LEVEL2 = """\
 .......-................
-...>...-................
+...>...-B...............
 wwwwwww*ww....wwwwwwwwww
 .......-...<............
 .......-................
@@ -650,24 +681,24 @@ LEVEL5 = """\
     "\n"
 )
 
-CUT_LEVEL = """\
-...........G............
-........................
-........................
-........................
-........................
-##ssssssssssssssssssss..
-........................
-..>.........sssssss.....
-............sssssss.....
-..>.........sssssss.....
-............sssssss.....
-..ssssss................
-..ssssss................
-..ssssss...+............
+BOSS_FIGHT = """\
 ...........-............
 ...........-............
 ...........-............
+...........-............
+...........-............
+...........-............
+...........-............
+...........-............
+...........-............
+...........-............
+...........$............
+...........-............
+...........-............
+...........-............
+...........-............
+...........-............
+.....P.....-............
 ...........-............
 ...........-............
 ...........-............
@@ -679,18 +710,23 @@ CUT_LEVEL = """\
     "\n"
 )
 
+
 Tile = Union[Wall, BreakWall, Pillar, DeadKnight, Planks]
 
 foreground_layer: Dict[Tuple[int, int], Tile] = {}
 bgmusic = rl.load_music_stream("bg.mp3")
 rl.play_music_stream(bgmusic)
+can_control = True
 
 
 def load_level(level, do_find_path=True):
+    global can_control
     foreground_layer.clear()
     state.darts.clear()
     state.bombs.clear()
     state.knights.clear()
+    state.boss = None
+    can_control = True
 
     for y, row in enumerate(level):
         for x, c in enumerate(row):
@@ -698,6 +734,8 @@ def load_level(level, do_find_path=True):
                 foreground_layer[(x, y)] = BreakWall()
             if c == "w":
                 foreground_layer[(x, y)] = Wall()
+            if c == "$":
+                state.boss = Lermin(V2(x, y) * GRID_SIZE)
             if c == "^":
                 foreground_layer[(x, y)] = Spikes()
             if c == "s":
@@ -768,9 +806,6 @@ def intro():
     text = "(which you can use by hitting SPACE, btw)"
     yield from wait_for_click()
 
-    text = "..."
-    yield from wait_for_click()
-
     portrait_emotion = "sad"
     text = "You know. It isn't what it's cracked up to be."
     yield from wait_for_click()
@@ -794,7 +829,6 @@ def intro():
     text = "to guard his *dumb* castle."
     yield from wait_for_click()
 
-    portrait_emotion = None
     text = "And I've been stuck at this"
     yield from wait_for_click()
 
@@ -804,6 +838,12 @@ def intro():
 
     portrait_emotion = "sad"
     text = "*sigh*"
+    yield from wait_for_click()
+
+    text = "..."
+    yield from wait_for_click()
+
+    text = "My death lead to an unfortunate new beginning."
     yield from wait_for_click()
 
     portrait_emotion = None
@@ -826,6 +866,10 @@ def intro():
     text = "*sigh*"
     yield from wait_for_click()
 
+    portrait_emotion = None
+    text = "..."
+    yield from wait_for_click()
+
     portrait_emotion = "anger"
     text = "I said: *SIGH*"
     yield from wait_for_click()
@@ -837,12 +881,8 @@ def intro():
 
     def knight_coro():
         yield from tween(kpos, (state.player.pos + V2(1, 0)) * GRID_SIZE, 4, "move")
-        try:
-            while True:
-                yield C("slice", frame=0)
-        except Die:
-            yield "move"
-            return "die"
+        while True:
+            yield C("slice", frame=0)
 
     k.coro = knight_coro()
     state.knights.append(k)
@@ -863,7 +903,7 @@ def intro():
         yield from wait_for_click()
 
         portrait = None
-        text = "Help overflow Lermin?"
+        text = "Help overthrow Lermin?"
         while (choice := choice_buttons("yes", "no")) is None:
             yield
 
@@ -871,6 +911,10 @@ def intro():
             portrait = sprites.knight_portrait
             text = "Curses."
             yield from tween(kpos, V2(SCREEN_WIDTH // 2, SCREEN_HEIGHT + 20), 4)
+
+            portrait = sprites.hero_portrait
+            text = "Hmph. Might as well see what they'll do"
+            yield from wait_for_click()
 
         if choice == "yes":
             yield
@@ -894,6 +938,9 @@ def intro():
             yield from wait_for_click()
 
             text = "-err... skeleton shield,"
+            yield from wait_for_click()
+
+            text = "(as you are unkillable),"
             yield from wait_for_click()
 
             text = "give orders,"
@@ -925,6 +972,9 @@ def intro():
             text = "or anyone else, we *will* hit you."
             yield from wait_for_click()
 
+            text = "Alright old chap. On with it!"
+            yield from wait_for_click()
+
             portrait = sprites.hero_portrait
             portrait_emotion = "anger"
             text = "..."
@@ -946,7 +996,7 @@ def intro():
             yield from wait_for_click()
 
             portrait = None
-            text = "Game completed (Ending 1): the any% route"
+            text = "Game completed (Ending 1): the fast any% route"
             yield from wait_for_click()
 
             sys.exit(0)
@@ -961,8 +1011,6 @@ def spawn_waves():
     global text
     wave_i = 0
     knights_alive = state.knights_alive
-    knights_alive=12
-    print('alive', knights_alive)
     nwaves, last_wave_count = divmod(knights_alive, 5)
     nwaves_display = nwaves + (1 if last_wave_count > 0 else 0)
     for wave_i in range(nwaves):
@@ -972,7 +1020,8 @@ def spawn_waves():
 
         yield from wait(10)
 
-    wave_i += 1
+    if last_wave_count:
+        wave_i += 1
 
     text = f"wave {wave_i+1}/{nwaves_display}"
     for i in range(last_wave_count):
@@ -1019,34 +1068,234 @@ def level_5():
     yield from spawn_waves()
 
 
-def cut_level_1():
-    load_level(CUT_LEVEL)
-    yield from wait(2)
+def boss_fight():
+    global text, portrait, portrait_emotion, can_control
+    load_level(BOSS_FIGHT)
+    can_control = False
 
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 40)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 60)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 80)))
+    yield from wait(1)
 
-    while True:
-        if any(
-            (knight.pos / GRID_SIZE).round() == state.path[-1]
-            for knight in state.knights
-        ):
-            break
+    portrait = sprites.lermin_portrait
+    text = "I take it, this is your resignation?"
+    yield from wait_for_click()
+
+    portrait = sprites.hero_portrait
+    text = "Yeah, I'm sick of you and this endless cycle."
+    yield from wait_for_click()
+
+    portrait_emotion = "anger"
+    text = 'Also, you were a lousy "boss"'
+    yield from wait_for_click()
+
+    portrait = sprites.lermin_portrait
+    portrait_emotion = None
+    text = "Oh, you don't understand."
+    yield from wait_for_click()
+
+    text = "This will be your resignation from life."
+    yield from wait_for_click()
+
+    text = "You will not survive without my power."
+    yield from wait_for_click()
+
+    while (choice := choice_buttons("Back down", 'Lead the charge')) is None:
         yield
 
-    global text
-    text = "Oh yeah."
+    yield
 
-    yield from wait(2)
+    if choice == 'Back down':
+        portrait = sprites.hero_portrait
+        text = "Err... ok, yeah you have a good point there."
+        yield from wait_for_click()
 
-    text = "We're gonna need you to show the rest of the way."
+        text = "I'm bailing."
+        yield from wait_for_click()
 
-    print("waiting")
+        can_control = True
 
-    while state.knights:
+        portrait = None
+        text = ""
+
+        state.boss.vulnerable = True
+        while state.player.pos.floor().y != GRID_COUNT - 1:
+            if state.boss is None:
+                text = "Very cheeky."
+                yield from wait_for_click()
+
+                text = "The old, hit 'em when they least expect it"
+                yield from wait_for_click()
+
+                explode_sprite(state.player.pos)
+                state.player.alive = False
+
+                portrait = sprites.hero_portrait
+                text = "Worth it..."
+                yield from wait_for_click()
+
+                portrait = None
+                text = "Game over (Ending 4): very cheeky"
+                yield from wait_for_click()
+                sys.exit(0)
+
+            yield
+
+        state.player.alive = False
+        text = "With that, the story ends."
+        yield from wait_for_click()
+
+        text = "Our hero, returns to his post,"
+        yield from wait_for_click()
+
+        text = "and continues to live an uneventful life,"
+        yield from wait_for_click()
+
+        text = "indefinitely..."
+        yield from wait_for_click()
+
+        text = "Game over (Ending 5): stayin' alive"
+        yield from wait_for_click()
+        sys.exit(0)
+
+    if choice == 'Lead the charge':
+        portrait = sprites.hero_portrait
+        portrait_emotion = "anger"
+        text = "LET'S ROLL!"
+        yield from wait_for_click()
+
+
+    portrait_emotion = None
+
+
+    can_control = True
+
+    break_crystal = False
+    if state.knights_alive < 5:
+        portrait = sprites.lermin_portrait
+        text = "Fool."
+        yield from wait_for_click()
+
+        text = "Everyone knows,"
+        yield from wait_for_click()
+
+        text = "it takes at least 5 knights to defeat a sourcerer."
+        yield from wait_for_click()
+    else:
+        break_crystal = True
+
+    portrait = None
+    text = ""
+
+    state.boss.coro = state.boss.drop_bombs()
+
+    yield from spawn_waves()
+
+    state.boss.coro = None
+
+    if break_crystal:
+        portrait = sprites.lermin_portrait
+        text = "Uh... whoopsie"
+        yield from wait_for_click()
+
+        state.boss.vulnerable = True
+
+        text = "it seems my magic crystal broke"
+        yield from wait_for_click()
+
+        text = "er..."
+        yield from wait_for_click()
+
+        text = "best 2 outta 3?"
+        yield from wait_for_click()
+
+        def f():
+            global text
+            text = "Wait! Don't kill me. All you have to do is leave."
+            yield from wait_for_click()
+
+            text = "I'll forget all about this."
+            yield from wait_for_click()
+
+            text = "Just walk out of here."
+            yield from wait_for_click()
+
+            while True:
+                yield
+
+        for x in f():
+            if state.boss is None:
+                wait(3)
+                explode_sprite(state.player.pos * GRID_SIZE)
+                state.player.alive = False
+
+                portrait = None
+                text = "That was the end of Lermin."
+                yield from wait_for_click()
+
+                text = "It was a new start for the region."
+                yield from wait_for_click()
+
+                text = "Nearby villages and farms were able to rebuild,"
+                yield from wait_for_click()
+
+                text = "without the threat of the necromancer."
+                yield from wait_for_click()
+
+                text = "(Imagine a 1-bit picture here of a happy town.)"
+                yield from wait_for_click()
+
+                text = "(I ran out of development time :P)"
+                yield from wait_for_click()
+
+                text = "The end."
+                yield from wait_for_click()
+
+                text = "Game complete (Ending 6):"
+                yield from wait_for_click()
+                text = "A new beginning for everyone else."
+                break
+            if int(state.player.pos.y) == GRID_COUNT - 1:
+                state.player.alive = False
+                state.boss.vulnerable = False
+                portrait = sprites.hero_portrait
+
+                text = "Fine."
+                yield from wait_for_click()
+
+                text = "At least you can't create anymore undeads."
+                yield from wait_for_click()
+
+                text = "I'm outta here."
+                yield from wait_for_click()
+
+                portrait = None
+
+                text = "Game complete (Ending 3):"
+                yield from wait_for_click()
+                text = "Crystal smasher."
+                yield from wait_for_click()
+                sys.exit(0)
+
+            yield
+    else:
+        portrait = sprites.lermin_portrait
+        text = "All that work for nothing."
+        yield from wait_for_click()
+
+        text = "You'll just have to go back to the beginning."
+        yield from wait_for_click()
+
+        text = "And do the same thing again."
+        yield from wait_for_click()
+
+        text = "MwaHahhAHahHAHAHA"
+        yield from wait_for_click()
+
+        portrait = None
+        text = "Game over (Ending 2): underpowered"
+        yield from wait_for_click()
+
+        sys.exit(0)
+    while True:
         yield
 
 
@@ -1062,6 +1311,7 @@ def tile_free(state, tile):
         )
         and tile != state.player.pos
         and tile != state.player.next_pos
+        and (state.boss is None or tile != (state.boss.pos / GRID_SIZE).round())
         and state.path
         and all(state.path[k.path_i] != tile for k in state.knights)
         and all((bomb.pos / GRID_SIZE).round() != tile for bomb in state.bombs)
@@ -1070,6 +1320,9 @@ def tile_free(state, tile):
 
 sprites = Sprites()
 sprites.load("knight.png", 5, anims={"slice": [0, 2, 3], "dead": [4]})
+sprites.load(
+    "lermin_portrait.png", 2, anims={"idle": lambda: int((rl.get_time() % 7) > 6.9)}
+)
 sprites.load(
     "knight_portrait.png", 4, anims={"talk": [0, 1, 2, 3], "idle": [0, 1, 2, 3]}
 )
@@ -1105,6 +1358,13 @@ sprites.load("portcullis.png")
 sprites.load("wall_variant_1.png")
 sprites.load("wall_variant_2.png")
 
+sprites.load(
+    "lermin.png",
+    nframes=5,
+    origin=rl.Vector2(0, -GRID_SIZE),
+    anims={"idle": [0, 1, 2, 3], "hit": [4]},
+)
+
 
 def find_path(level):
     def find_start():
@@ -1124,7 +1384,7 @@ def find_path(level):
             if (
                 0 <= n.x < len(level[0])
                 and 0 <= n.y < len(level)
-                and level[n.y][n.x] in "-*^+p"
+                and level[n.y][n.x] in "-*^$+p"
                 and n not in visited
             ):
                 path.append(n)
@@ -1172,15 +1432,17 @@ def final_screen():
 
 input_tween = None
 
-level_coros = [
-    intro(),
-    level_1(),
-    level_2(),
-    level_3(),
-    level_4(),
-    level_5(),
-    final_screen(),
+level_coros_gen_fs = [
+    intro,
+    level_1,
+    level_2,
+    level_3,
+    level_4,
+    level_5,
+    boss_fight,
 ]
+
+level_coro = level_coros_gen_fs[0]()
 explosions = []
 text = ""
 portrait = None
@@ -1200,10 +1462,6 @@ class ContextStr(str):
 C = ContextStr
 
 
-class Die(BaseException):
-    pass
-
-
 def hit(pos: V2, d: V2, destroy=False):
     if state.player.pos.floor() == pos:
         state.player.shake_amount = 4
@@ -1212,9 +1470,13 @@ def hit(pos: V2, d: V2, destroy=False):
         if (bomb.pos / GRID_SIZE).floor() == pos:
             bomb.hit(d)
 
+    if state.boss:
+        if (state.boss.pos / GRID_SIZE).floor() == pos:
+            state.boss.hit(d)
+
     for i, knight in enumerate(state.knights):
         if (knight.pos / GRID_SIZE).round() == pos:
-            state.knights[i].coro.throw(Die)
+            state.knights[i].coro = knight_die(state.knights[i])
 
     p = (pos[0], pos[1])
     if p in foreground_layer:
@@ -1260,14 +1522,30 @@ def explode_sprite(pos, delay=0, shockwave=False):
 
 
 def step_game(state):
-    global input_tween
+    global input_tween, level_coro, starting_knights_alive, text, portrait, portrait_emotion
 
     rl.update_music_stream(bgmusic)
 
-    try:
-        next(level_coros[state.cur_level])
-    except StopIteration:
-        state.cur_level += 1
+    if state.knights_alive > 0:
+        try:
+            next(level_coro)
+        except StopIteration:
+            state.cur_level += 1
+            starting_knights_alive = state.knights_alive
+            level_coro = level_coros_gen_fs[state.cur_level]()
+            text = ""
+            portrait = None
+            portrait_emotion = None
+    else:
+        text = "hit 'R' to restart (keep at least 1 knight alive)"
+
+    if rl.is_key_released(rl.KEY_R):
+        level_coro = level_coros_gen_fs[state.cur_level]()
+        state.knights_alive = starting_knights_alive
+        text = ""
+        portrait = None
+        portrait_emotion = None
+
 
     rl.begin_mode_2d(camera)
 
@@ -1281,7 +1559,7 @@ def step_game(state):
     if rl.is_key_down(rl.KEY_DOWN):
         move = V2(0, 1)
 
-    if input_tween is None:
+    if input_tween is None and can_control:
         if rl.is_key_pressed(rl.KEY_SPACE):
             input_tween = player_bonk()
         if move:
@@ -1393,28 +1671,29 @@ def step_game(state):
         )
 
     # draw after all updates
-    if input_tween is not None:
-        assert input_state is not None
-        if input_state == "move":
+    if state.player.alive:
+        if input_tween is not None:
+            assert input_state is not None
+            if input_state == "move":
+                sprites.hero.draw_frame(
+                    state.player.pos * GRID_SIZE + shake_vec,
+                    sprites.hero.anims["walk"][int((rl.get_time() % 0.2) / 0.1)],
+                    state.player.flip,
+                )
+            elif input_state == "bonk":
+                sprites.hero.draw_frame(
+                    state.player.pos * GRID_SIZE,
+                    sprites.hero.anims["bonk"][input_state["frame"]],
+                    state.player.flip,
+                )
+            else:
+                assert False, input_state
+        else:
             sprites.hero.draw_frame(
                 state.player.pos * GRID_SIZE + shake_vec,
-                sprites.hero.anims["walk"][int((rl.get_time() % 0.2) / 0.1)],
+                sprites.hero.anims["idle"][int((rl.get_time() % 5) > 4.9)],
                 state.player.flip,
             )
-        elif input_state == "bonk":
-            sprites.hero.draw_frame(
-                state.player.pos * GRID_SIZE,
-                sprites.hero.anims["bonk"][input_state["frame"]],
-                state.player.flip,
-            )
-        else:
-            assert False, input_state
-    else:
-        sprites.hero.draw_frame(
-            state.player.pos * GRID_SIZE + shake_vec,
-            sprites.hero.anims["idle"][int((rl.get_time() % 5) > 4.9)],
-            state.player.flip,
-        )
 
     for bomb_i, bomb in enumerate(state.bombs):
         if bomb.move_coro:
@@ -1440,7 +1719,7 @@ def step_game(state):
         destroy_dart = False
         for knight_i, knight in enumerate(state.knights):
             if rl.check_collision_recs(dart_rect, knight.rect()):
-                knight.coro.throw(Die)
+                knight.coro = knight_die(knight)
                 destroy_dart = True
                 break
 
@@ -1470,6 +1749,7 @@ def step_game(state):
         if destroy_dart:
             del state.darts[dart_i]
 
+
     for i, knight in enumerate(state.knights):
         kstate = "move"
         try:
@@ -1494,8 +1774,20 @@ def step_game(state):
                 sprites.knight.anims["slice"][kstate["frame"]],
                 knight.flipped,
             )
+        elif kstate == "die":
+            del state.knights[i]
+            state.knights_alive -= 1
+            foreground_layer[(knight.pos // GRID_SIZE).astuple()] = DeadKnight()
+            explode_sprite(knight.pos.floor(), delay=0.1)
         else:
             assert False
+
+    if state.boss:
+        sprites.lermin.draw_frame(
+            state.boss.pos, int((rl.get_time() % 0.4) / 0.1), False
+        )
+        if state.boss.coro:
+            next(state.boss.coro)
 
     for i, explosion in enumerate(explosions):
         try:
