@@ -1526,7 +1526,7 @@ def step_game(state):
 
     rl.update_music_stream(bgmusic)
 
-    if state.knights_alive > 0:
+    if state.knights_alive > 0 or state.cur_level == 6:
         try:
             next(level_coro)
         except StopIteration:
