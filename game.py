@@ -326,6 +326,11 @@ class Bomb:
             hit((((self.pos / GRID_SIZE) + d)).floor(), d, destroy=True)
 
 
+@dataclass
+class StaticSprite:
+    sprite: Any
+
+
 class Wall:
     pass
 
@@ -462,6 +467,7 @@ state = Namespace(
         flip=False,
         shake_amount=0,
     ),
+    knights_alive=15,
     knights=[],
     darts=[],
     bombs=[],
@@ -470,11 +476,11 @@ state = Namespace(
 )
 
 INTRO = """\
+ww2wwwwwwwwwwwwwwwww2www
+w3wwwwwwwwwwww3wwwwwwwww
+wwwww3wwww1.wwwwwwwwwwww
+wwwwwwwwww..wwwwwwwwwwww
 ........................
-........................
-........................
-........................
-wwwwwwwwwwwwwwwwwwwwwwww
 ........................
 .................P......
 ........................
@@ -708,6 +714,12 @@ def load_level(level, do_find_path=True):
                 state.bombs.append(Bomb(V2(x, y) * GRID_SIZE, None))
             elif c == "P":
                 state.player.pos = V2(x, y)
+            elif c == "1":
+                foreground_layer[(x, y)] = StaticSprite(sprites.portcullis)
+            elif c == "2":
+                foreground_layer[(x, y)] = StaticSprite(sprites.wall_variant_1)
+            elif c == "3":
+                foreground_layer[(x, y)] = StaticSprite(sprites.wall_variant_2)
 
     if do_find_path:
         state.path = find_path(level)
@@ -945,74 +957,66 @@ def intro():
     portrait = None
 
 
+def spawn_waves():
+    global text
+    wave_i = 0
+    knights_alive = state.knights_alive
+    knights_alive=12
+    print('alive', knights_alive)
+    nwaves, last_wave_count = divmod(knights_alive, 5)
+    nwaves_display = nwaves + (1 if last_wave_count > 0 else 0)
+    for wave_i in range(nwaves):
+        text = f"wave {wave_i + 1}/{nwaves_display}"
+        for i in range(5):
+            state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, i * 20)))
+
+        yield from wait(10)
+
+    wave_i += 1
+
+    text = f"wave {wave_i+1}/{nwaves_display}"
+    for i in range(last_wave_count):
+        state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, i * 20)))
+
+    while state.knights:
+        yield
+
+    text = ""
+
+
 def level_1():
     load_level(LEVEL1)
     yield from wait(4)
 
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 40)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 60)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 80)))
-
-    while state.knights:
-        yield
+    yield from spawn_waves()
 
 
 def level_2():
     load_level(LEVEL2)
     yield from wait(2)
 
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 40)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 60)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 80)))
-
-    while state.knights:
-        yield
+    yield from spawn_waves()
 
 
 def level_3():
     load_level(LEVEL3)
     yield from wait(2)
 
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 40)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 60)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 80)))
-
-    while state.knights:
-        yield
+    yield from spawn_waves()
 
 
 def level_4():
     load_level(LEVEL4)
     yield from wait(2)
 
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 40)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 60)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 80)))
-
-    while state.knights:
-        yield
+    yield from spawn_waves()
 
 
 def level_5():
     load_level(LEVEL5)
     yield from wait(2)
 
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 20)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 40)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 60)))
-    state.knights.append(Knight(0, state.path[0] * GRID_SIZE + V2(0, 80)))
-
-    while state.knights:
-        yield
+    yield from spawn_waves()
 
 
 def cut_level_1():
@@ -1097,6 +1101,9 @@ sprites.load("cannon.png", nframes=4)
 sprites.load("explosion.png", nframes=5)
 sprites.load("spikes.png", nframes=1)
 sprites.load("planks.png")
+sprites.load("portcullis.png")
+sprites.load("wall_variant_1.png")
+sprites.load("wall_variant_2.png")
 
 
 def find_path(level):
@@ -1330,6 +1337,9 @@ def step_game(state):
                 tile_state["frame"],
                 tile.flipped,
             )
+        elif isinstance(tile, StaticSprite):
+            flip = hash(pos) % 2
+            tile.sprite.draw_frame(V2(*pos) * GRID_SIZE, 0, flip)
         elif isinstance(tile, Pillar):
             tile_state = tile.update()
             if tile_state == "shake":
@@ -1470,6 +1480,7 @@ def step_game(state):
                 # state.passed_knights += 1
             if e.value == "die":
                 del state.knights[i]
+                state.knights_alive -= 1
                 foreground_layer[(knight.pos // GRID_SIZE).astuple()] = DeadKnight()
                 explode_sprite(knight.pos.floor(), delay=0.1)
 
