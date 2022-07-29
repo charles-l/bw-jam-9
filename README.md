@@ -1,5 +1,5 @@
 # Sorcerer Siege
-submission for https://itch.io/jam/black-and-white-jam-9
+[Submission for Black and White Jam 9](https://itch.io/jam/black-and-white-jam-9/rate/1592996)
 
 ![cover art](cover_large.png)
 
